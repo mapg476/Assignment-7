@@ -1,0 +1,257 @@
+---
+title: "Assignment 7_Andrea Patino"
+author: "Andrea Patino"
+format: html
+editor: visual
+---
+
+# NRSC 4480/ENVS 5480:
+
+Ecological Modelling, Assignment 7: LiDAR
+
+## Part 1
+
+1.  **Download the .LAS file from Moodle with your name on it.**
+
+a\. How many points are in your LAS file? Provide a line of code to determine this.
+
+2.45 million points
+
+```{r}
+library(units)
+library(lidR)
+library(terra)
+library(mapview)
+library(tidyverse)
+
+las <- readLAS("Andrea Garces.las")
+las_select <- readLAS("Andrea Garces.las", select = "xyz")
+las_select
+```
+
+b\. What is the maximum elevation within your point cloud? Provide a line of code to determine this
+
+Maximum elevation 1396.313
+
+```{r}
+max_elevation <- grid_metrics(las_select, ~max(Z))
+max_elevation
+```
+
+2.  **This question will get you producing various DEM’s:**
+
+a\. Classify ground points using the cloth simulated function (CSF) algorithm and produce a DEM using the triangular irregular network (TIN) algorithm.
+
+```{r}
+library(ggplot2)
+plot_crossection <- function(las,
+                             p1 = c(min(las@data$X), mean(las@data$Y)),
+                             p2 = c(max(las@data$X), mean(las@data$Y)),
+                             width = 4, colour_by = NULL)
+{
+  require(ggplot2)
+  colour_by <- rlang::enquo(colour_by)
+  data_clip <- clip_transect(las, p1, p2, width)
+  p <- ggplot(data_clip@data, aes(X,Z)) + 
+    geom_point(size = 0.5) + 
+    coord_equal() + 
+    theme_minimal()
+  
+  if (!is.null(colour_by))
+    p <- p + 
+    aes(color = !!colour_by) + labs(color = "")
+  
+  return(p)
+}
+
+p1 <- c(min(las@data$X), mean(las@data$Y))
+p1
+p2 <- c(max(las@data$X), mean(las@data$Y))
+p2
+
+las_ground <- classify_ground(las, algorithm = csf())
+
+p1 <- c(1484382.0, 568547.9)
+p2 <- c(1484600.0, 568547.9)
+
+plot_crossection(las, p1 = p1, p2 = p2, colour_by = factor(Classification))
+
+mycsf <- csf(sloop_smooth = TRUE, class_threshold = 1, cloth_resolution = 1,
+             time_step = 1)
+
+las_ground <- classify_ground(las, algorithm = mycsf)
+
+plot_crossection(las_ground, p1 = p1, p2 = p2, colour_by = factor(Classification))
+
+dtm_tin <- rasterize_terrain(las_ground, res = 1, algorithm = tin())
+dem_prod <- terrain(dtm_tin, v = c("slope", "aspect"), unit = "radians")
+dem_hillshade <- shade(slope = dem_prod$slope, aspect = dem_prod$aspect)
+plot(dem_hillshade, col = gray(0:30/30), legend = FALSE)
+```
+
+b\. Classify ground points using a progressive morphological filter (PMF) algorithm and produce a DEM using the TIN algorithm.
+
+```{r}
+las_select_pmf <- readLAS("Andrea Garces.las", select = "xyzrn")
+las_pmf <- classify_ground(las_select_pmf, algorithm = pmf(ws = 5, th = 3))
+dtm_tin_2 <- rasterize_terrain(las_pmf, res = 1, algorithm = tin())
+dem_prod_2 <- terrain(dtm_tin_2, v = c("slope", "aspect"), unit = "radians")
+dem_hillshade_2 <- shade(slope = dem_prod_2$slope, aspect = dem_prod_2$aspect)
+plot(dem_hillshade_2, col = gray(0:30/30), legend = FALSE)
+```
+
+c\. Classify ground points using the CSF algorithm and produce a DEM using the inverse distance weighting algorithm.
+
+```{r}
+dtm_idw <- rasterize_terrain(las_ground, algorithm = knnidw(k = 10L, p = 2))
+dem_prod_3 <- terrain(dtm_idw, v = c("slope", "aspect"), unit = "radians")
+dem_hillshade_3 <- shade(slope = dem_prod_3$slope, aspect = dem_prod_3$aspect)
+plot(dem_hillshade_3, col = gray(0:30/30), legend = FALSE)
+```
+
+d\. Briefly describe how the PMF algorithm works.
+
+With PMF we need to define the window size (ws) and the threshold heights (th). We also need the LAS file with the attributes x, y, z and r, n (r = return number, n = number of returns).
+
+3.  **This question gets you producing some canopy height models (CHM’s):**
+
+a\. Normalize the point cloud using the inverse distance weighting algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+```{r}
+gnd <- filter_ground(las_ground)
+
+nlas <- normalize_height(las_ground, knnidw())
+
+gnd_nlas <- filter_ground(nlas)
+plot(gnd_nlas)
+plot(nlas)
+
+plot(nlas, size = 4, bg = "white")
+hist(filter_ground(nlas)$Z, breaks = seq(-0.6, 0.6, 0.01), main = "", xlab = "Elevation")
+
+chm <- rasterize_canopy(nlas, res = 0.5, algorithm = p2r(subcircle = 0.15))
+col <- height.colors(25)
+plot(chm, col = col)
+```
+
+b\. Normalize the point cloud using the TIN algorithm and then produce a CHM using the TIN algorithm as well (i.e.: the “dsmtin” algorithm).
+
+```{r}
+nlas_2 <- normalize_height(las_ground, algorithm = tin())
+chm_2 <- rasterize_canopy(nlas_2, res = 0.5, algorithm = dsmtin(max_edge = 5))
+plot(chm_2, col = col)
+```
+
+c\. Normalize the point cloud using the TIN algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+```{r}
+chm_3 <- rasterize_canopy(nlas_2, res = 0.5, algorithm = p2r(subcircle = 0.15))
+col <- height.colors(25)
+plot(chm_3, col = col)
+```
+
+d\. Briefly describe how the inverse distance weighting algorithm works.
+
+It is based on the assumption that the value of a point can be approximated as a mean weighted average of the values of the points located at a given distance or of a given number of nearest neighboring points.
+
+Compared to tin() this method is more robust to edge artifacts because it uses a more relevant neighborhood but generates terrains that are "bumpy" and probably not as realistic as those generated using TINs.
+
+4.  **Choose one of the three normalization/CHM combinations from question three to move forward with.**
+
+a\. Perform individual tree segmentation (ITS) of the normalized point cloud using the Dalponte 2016 algorithm.
+
+```{r}
+ttops <- locate_trees(chm, lmf(5))
+las_its_dalponte <- segment_trees(nlas, dalponte2016(chm, ttops))
+plot(las_its_dalponte, color = "treeID", size = 1)
+```
+
+b\. Perform ITS of the normalized point cloud using the Li et al. 2012 algorithm.
+
+```{r}
+las_its_li <- segment_trees(nlas, li2012(dt1 = 1.5, dt2 = 2, R = 2, Zu = 15, hmin = 2, speed_up = 10))
+plot(las_its_li, color = "treeID", size = 1)
+```
+
+c\. Perform ITS of the normalized point cloud using the Silva 2016 algorithm.
+
+```{r}
+las_its_silva <- segment_trees(nlas, silva2016(chm, ttops))
+plot(las_its_silva, color = "treeID", size = 1)
+```
+
+d\. Briefly describe how the Silva 2016 algorithm works.
+
+In the Silva2016 we need the CHM and the ttops. Does not need the point clouds, so is faster than Li2012.
+
+5.  **Retrieve the crown metrics for each of the tree segmented point clouds produced in number 4. How many trees were identified in each algorithm? What is the overall tree density in each of the segmented point clouds?**
+
+Dalponte2016: 1042
+
+Li2012: 1850
+
+Silva2016: 1041
+
+```{r}
+
+metrics_dalponte <- crown_metrics(las_its_dalponte, .stdtreemetrics, geom = "concave")
+mapview(metrics_dalponte, zcol = "treeID")
+
+metrics_li <- crown_metrics(las_its_li, .stdtreemetrics, geom = "concave")
+mapview(metrics_li, zcol = "treeID")
+
+metrics_silva <- crown_metrics(las_its_silva, .stdtreemetrics, geom = "concave")
+mapview(metrics_silva, zcol = "treeID")
+```
+
+## Part 2
+
+1.  Isolate the tallest tree in one of the segmented point clouds. How many points are there that make up this particular tree?
+
+43 points
+
+```{r}
+install_unit("stems")
+
+tall_trees <- metrics_dalponte %>% 
+  filter(Z > 10)
+las_tree_filter <- filter_poi(las_its_dalponte, treeID %in% tall_trees$treeID)
+plot(las_tree_filter, color = "treeID", size = 1)
+las_tree_single <- filter_poi(las_its_dalponte, treeID == tall_trees$treeID[1])
+plot(las_tree_single, color = "Z", size = 5)
+las_tree_single
+```
+
+2.  What is the crown area of the tallest tree? What about the crown area of the shortest tree?
+
+Crown area of the tallest tree: 14
+
+Crown area of the shortest tree: 28
+
+```{r}
+tall_tree <- set_units(nrow(las_tree_single), "stems")
+st_area(las_tree_filter)
+pc_area <- set_units(st_area(las_tree_filter), "ha")
+tall_tree / pc_area
+round(tall_tree / pc_area)
+
+small_trees <- metrics_dalponte %>% 
+  filter(Z < 5)
+las_tree_filter_2 <- filter_poi(las_its_dalponte, treeID %in% small_trees$treeID)
+plot(las_tree_filter_2, color = "treeID", size = 1)
+las_tree_single_2 <- filter_poi(las_its_dalponte, treeID == small_trees$treeID[1])
+plot(las_tree_single_2, color = "Z", size = 5)
+las_tree_single_2
+
+small_tree <- set_units(nrow(las_tree_single_2), "stems")
+st_area(las_tree_filter_2)
+pc_area_small <- set_units(st_area(las_tree_filter_2), "ha")
+small_tree / pc_area_small
+round(small_tree / pc_area_small)
+```
+
+3.  Plot this point cloud coloring the points by their treeID.
+
+```{r}
+plot(las_tree_single_2, color = "treeID", size = 5)
+```
